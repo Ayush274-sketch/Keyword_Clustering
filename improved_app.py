@@ -51,6 +51,15 @@ def detect_language(text):
     except:
         return 'Unknown Language'
 
+def preprocess_keywords(df):
+    # Custom preprocessing for specific keywords
+    location_keywords = ["delhi", "gurgaon", "pune"]
+    df['Keyword'] = df['Keyword'].str.lower()  # Convert to lowercase for consistency
+
+    # Ensure the specific keywords are treated distinctly
+    df['Keyword'] = df['Keyword'].apply(lambda x: x if x not in location_keywords else f"loc_{x}")
+    
+    return df
 
 st.title("Semantic Keyword Clustering Tool")
 st.write("Upload a CSV or XLSX file containing keywords for clustering.")
@@ -102,6 +111,9 @@ if uploaded_file:
             
             st.write("Sample of the data (first 5 rows):")
             st.write(df['Keyword'].head())
+
+            # Preprocess keywords to handle specific cases
+            df = preprocess_keywords(df)
 
             sample_keywords = df['Keyword'].sample(min(100, len(df))).tolist()
             detected_languages = [detect_language(keyword) for keyword in sample_keywords]
