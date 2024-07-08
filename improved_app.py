@@ -137,6 +137,7 @@ if uploaded_file:
                 if len(corpus_sentences) == 0:
                     break
 
+                model = SentenceTransformer(transformer)
                 corpus_embeddings = model.encode(corpus_sentences, batch_size=256, show_progress_bar=True, convert_to_tensor=True)
                 
                 if len(corpus_embeddings.shape) == 1:
@@ -189,4 +190,84 @@ if uploaded_file:
                         corpus_sentences_list.append(corpus_sentences[sentence_id])
                         cluster_name_list.append(f"Cluster {cluster_id + 1}")
 
-                df_new = pd.DataFrame
+                df_new = pd.DataFrame({
+                    "Keyword": corpus_sentences_list,
+                    "Cluster Name": cluster_name_list
+                })
+
+                corpus_set = corpus_set - set(corpus_sentences_list)
+                corpus_sentences_list = []
+                cluster_name_list = []
+                iterations += 1
+
+                if iterations > 100 or check_len == len(corpus_set):
+                    cluster = False
+                    df_all = df_new
+                else:
+                    if len(df_all) == 0:
+                        df_all = df_new
+                    else:
+                        df_all = pd.concat([df_all, df_new], ignore_index=True)
+
+            if not df_all.empty:
+                st.write("Clustering completed!")
+                st.write(df_all)
+                st.write("Cluster distribution:")
+                st.write(df_all['Cluster Name'].value_counts())
+
+                st.write("Sample of clustered data (first 5 rows):")
+                st.write(df_all.head())
+
+                colors = generate_colors(df_all['Cluster Name'].nunique())
+                cluster_color_map = {cluster: color for cluster, color in zip(df_all['Cluster Name'].unique(), colors)}
+                df_all['Color'] = df_all['Cluster Name'].map(cluster_color_map)
+
+                st.write("Cluster visualization:")
+                pca = PCA(n_components=3)
+                pca_result = pca.fit_transform(model.encode(df_all['Keyword'].tolist(), show_progress_bar=True, convert_to_tensor=True).cpu().numpy())
+
+                df_all['pca_1'] = pca_result[:, 0]
+                df_all['pca_2'] = pca_result[:, 1]
+                df_all['pca_3'] = pca_result[:, 2]
+
+                fig = go.Figure(data=[go.Scatter3d(
+                    x=df_all['pca_1'],
+                    y=df_all['pca_2'],
+                    z=df_all['pca_3'],
+                    mode='markers',
+                    marker=dict(
+                        size=5,
+                        color=df_all['Color'],
+                        opacity=0.8
+                    ),
+                    text=df_all['Keyword']
+                )])
+
+                fig.update_layout(
+                    margin=dict(l=0, r=0, b=0, t=0),
+                    scene=dict(
+                        xaxis=dict(title='PCA 1'),
+                        yaxis=dict(title='PCA 2'),
+                        zaxis=dict(title='PCA 3')
+                    )
+                )
+
+                st.plotly_chart(fig)
+
+            if not specific_df.empty:
+                df_final = pd.concat([df_all, specific_df], ignore_index=True)
+            else:
+                df_final = df_all
+
+            st.write("Final clustered data (including specific keywords):")
+            st.write(df_final)
+
+            st.download_button(
+                label="Download clustered data as CSV",
+                data=df_final.to_csv(index=False).encode('utf-8'),
+                file_name='clustered_keywords.csv',
+                mime='text/csv'
+            )
+
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
