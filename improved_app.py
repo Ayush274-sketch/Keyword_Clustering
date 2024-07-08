@@ -51,15 +51,10 @@ def detect_language(text):
     except:
         return 'Unknown Language'
 
-def preprocess_keywords(df):
-    # Custom preprocessing for specific keywords
-    location_keywords = ["delhi", "gurgaon", "pune"]
-    df['Keyword'] = df['Keyword'].str.lower()  # Convert to lowercase for consistency
-
-    # Ensure the specific keywords are treated distinctly
-    df['Keyword'] = df['Keyword'].apply(lambda x: x if x not in location_keywords else f"loc_{x}")
-    
-    return df
+def preprocess_keywords(df, specific_keywords):
+    specific_df = df[df['Keyword'].str.lower().isin(specific_keywords)]
+    other_df = df[~df['Keyword'].str.lower().isin(specific_keywords)]
+    return specific_df, other_df
 
 st.title("Semantic Keyword Clustering Tool")
 st.write("Upload a CSV or XLSX file containing keywords for clustering.")
@@ -112,9 +107,6 @@ if uploaded_file:
             st.write("Sample of the data (first 5 rows):")
             st.write(df['Keyword'].head())
 
-            # Preprocess keywords to handle specific cases
-            df = preprocess_keywords(df)
-
             sample_keywords = df['Keyword'].sample(min(100, len(df))).tolist()
             detected_languages = [detect_language(keyword) for keyword in sample_keywords]
             main_language = max(set(detected_languages), key=detected_languages.count)
@@ -122,8 +114,15 @@ if uploaded_file:
             st.write(f"Detected main language: {main_language}")
             st.write("Other detected languages: " + ', '.join(set(detected_languages) - {main_language, 'unknown'}))
 
-            model = SentenceTransformer(transformer)
-            corpus_set = set(df['Keyword'])
+            specific_keywords = {'pune', 'delhi', 'gurgaon'}
+            specific_df, other_df = preprocess_keywords(df, specific_keywords)
+
+            if not specific_df.empty:
+                specific_df['Cluster Name'] = specific_df['Keyword']
+                st.write("Specific keywords clustered separately:")
+                st.write(specific_df)
+
+            corpus_set = set(other_df['Keyword'])
             corpus_set_all = corpus_set
             cluster_name_list = []
             corpus_sentences_list = []
@@ -190,133 +189,4 @@ if uploaded_file:
                         corpus_sentences_list.append(corpus_sentences[sentence_id])
                         cluster_name_list.append(f"Cluster {cluster_id + 1}")
 
-                df_new = pd.DataFrame({'Cluster Name': cluster_name_list, 'Keyword': corpus_sentences_list})
-
-                df_all.append(df_new)
-                have = set(df_new["Keyword"])
-
-                corpus_set = corpus_set_all - have
-                remaining = len(corpus_set)
-                iterations += 1
-                if check_len == remaining:
-                    break
-
-            if len(df_all) == 0:
-                st.error("No clusters were formed. Please check your data or adjust the clustering parameters.")
-            else:
-                df_new = pd.concat(df_all)
-                df = df.merge(df_new.drop_duplicates('Keyword'), how='left', on="Keyword")
-
-                df['Cluster Name'] = df['Cluster Name'].fillna("no_cluster")
-
-                df['Length'] = df['Keyword'].astype(str).map(len)
-                df = df.sort_values(by="Length", ascending=True)
-                df['Cluster Name'] = df.groupby('Cluster Name')['Keyword'].transform('first')
-                df.sort_values(['Cluster Name', "Keyword"], ascending=[True, True], inplace=True)
-                df = df.drop('Length', axis=1)
-
-                df = df[['Cluster Name', 'Keyword']]
-
-                df.sort_values(["Cluster Name", "Keyword"], ascending=[True, True], inplace=True)
-
-                uncluster_percent = (remaining / len(df)) * 100
-                clustered_percent = 100 - uncluster_percent
-                st.write(f"{clustered_percent:.2f}% of rows clustered successfully!")
-                st.write(f"Number of iterations: {iterations}")
-                st.write(f"Total unclustered keywords: {remaining}")
-
-                st.write(f"Number of clusters: {len(df['Cluster Name'].unique())}")
-
-                if clustering_method != "Community Detection" and len(corpus_embeddings) > 1:
-                    cluster_coherences = calculate_cluster_coherence(corpus_embeddings.cpu().numpy(), cluster_labels)
-                    overall_coherence = np.mean(cluster_coherences)
-
-                    st.write(f"Overall Clustering Coherence: {overall_coherence:.4f}")
-                    st.write("Cluster Coherences:")
-                    cluster_names = df.groupby('Cluster Name')['Keyword'].first()
-                    for (cluster_id, cluster_name), coherence in zip(cluster_names.items(), cluster_coherences):
-                        st.write(f"{cluster_name}: {coherence:.4f}")
-
-                result_df = df.groupby('Cluster Name')['Keyword'].apply(', '.join).reset_index()
-                result_df.columns = ['Cluster', 'Keywords']
-
-                st.write(result_df)
-
-                embeddings = model.encode(df['Keyword'].tolist(), batch_size=256, show_progress_bar=True)
-
-                if embeddings.shape[1] > 3:
-                    pca = PCA(n_components=3)
-                    embeddings_3d = pca.fit_transform(embeddings)
-                elif embeddings.shape[1] < 3:
-                    st.error("Error: Embeddings have fewer than 3 dimensions. Please choose a different model.")
-                    st.stop()
-                else:
-                    embeddings_3d = embeddings
-
-                embeddings_normalized = (embeddings_3d - embeddings_3d.min(axis=0)) / (embeddings_3d.max(axis=0) - embeddings_3d.min(axis=0))
-
-                colors = ['rgb({},{},{})'.format(
-                    int(r*255), 
-                    int(g*255), 
-                    int(b*255)
-                ) for r, g, b in embeddings_normalized]
-
-                fig_3d = go.Figure(data=[go.Scatter3d(
-                    x=embeddings_3d[:, 0],
-                    y=embeddings_3d[:, 1],
-                    z=embeddings_3d[:, 2],
-                    mode='markers',
-                    marker=dict(
-                        size=5,
-                        color=colors,
-                        opacity=0.8
-                    ),
-                    text=df['Keyword'],
-                    hoverinfo='text'
-                )])
-
-                fig_3d.update_layout(
-                    width=1200,
-                    height=675,
-                    title='Keyword Embeddings in 3D Space',
-                    scene=dict(
-                        xaxis_title='Dimension 1',
-                        yaxis_title='Dimension 2',
-                        zaxis_title='Dimension 3'
-                    ),
-                    margin=dict(l=0, r=0, b=0, t=40)
-                )
-
-                st.plotly_chart(fig_3d, use_container_width=True)
-                with st.expander("ℹ️ About this visualization"):
-                    st.write("The position of each point in 3D space reflects the semantic similarity between keywords. Points that are closer together represent keywords with more similar meanings or contexts. This visualization works for multiple languages.")
-                
-                csv_data_clustered = result_df.to_csv(index=False)
-                st.download_button(
-                    label="Download Clustered Keywords",
-                    data=csv_data_clustered,
-                    file_name="Clustered_Keywords.csv",
-                    mime="text/csv"
-                )
-
-                if remaining > 0:
-                    st.write("Unclustered Keywords:")
-                    st.write(list(corpus_set))
-                    
-                    unclustered_df = pd.DataFrame(list(corpus_set), columns=['Unclustered Keyword'])
-                    
-                    csv_data_unclustered = unclustered_df.to_csv(index=False)
-                    st.download_button(
-                        label="Download Unclustered Keywords",
-                        data=csv_data_unclustered,
-                        file_name="Unclustered_Keywords.csv",
-                        mime="text/csv"
-                    )
-
-                st.write("Note: This tool supports clustering of keywords in multiple languages. The effectiveness may vary depending on the selected model and the languages present in your data.")
-
-    except pd.errors.EmptyDataError:
-        st.error("EmptyDataError: No columns to parse from file. Please upload a valid CSV or XLSX file.")
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
-        st.error("Please check your data and try again.")
+                df_new = pd.DataFrame
